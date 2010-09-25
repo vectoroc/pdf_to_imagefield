@@ -119,21 +119,33 @@ function pdf_to_imagefield_convert_pages($file, $path, $pdf) {
   pdf_to_imagefield_convert_pdf($source, $result, array(), array($density));
   $count = 0;
   $converted = array();
-  while (file_exists($path .'/'. $pdf['fid'] .'-'. $count .'.jpg')) {
-    $image = new stdClass();
-    $image->filename = $pdf['fid'] .'-'. $count .'.jpg';
-    $image->filepath = $path .'/'. $image->filename;
-    $image->filemime = file_get_mimetype($image->filepath);
-    $image->filesize = filesize($image->filepath);
-    $image->status = 1;
-    $image->timestamp = time();
-    $image->uid = 1;
-    drupal_write_record('files', $image);
-    $converted[] = $image;
-    $count++;
+  if (file_exists($path .'/'. $pdf['fid'] .'.jpg')) {
+    $converted[] = pdf_to_imagefield_save_image($pdf['fid'] .'.jpg', $path);
+  }
+  else {
+    while (file_exists($path .'/'. $pdf['fid'] .'-'. $count .'.jpg')) {
+      $converted[] = pdf_to_imagefield_save_image($pdf['fid'] .'-'. $count .'.jpg', $path);
+      $count++;
+    }
   }
   db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
   return $converted;
+}
+
+/**
+ * Save converted image to files table.
+ */
+function pdf_to_imagefield_save_image($filename, $path) {
+  $image = new stdClass();
+  $image->filename = $filename;
+  $image->filepath = $path .'/'. $filename;
+  $image->filemime = file_get_mimetype($image->filepath);
+  $image->filesize = filesize($image->filepath);
+  $image->status = 1;
+  $image->timestamp = time();
+  $image->uid = 1;
+  drupal_write_record('files', $image);
+  return $image;
 }
 
 /**
