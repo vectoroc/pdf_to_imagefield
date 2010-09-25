@@ -6,9 +6,9 @@ dependencies[] = imagefield
 dependencies[] = imageapi
 dependencies[] = imageapi_imagemagick
 package = CCK
-; Information added by drupal.org packaging script on 2010-05-14
-version = "6.x-1.0-beta1"
+; Information added by drupal.org packaging script on 2010-07-11
+version = "6.x-1.x-dev"
 core = "6.x"
 project = "pdf_to_imagefield"
-datestamp = "1273842910"
+datestamp = "1278835274"
 

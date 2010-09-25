@@ -46,7 +46,6 @@ function pdf_to_imagefield_cron() {
   $result = db_query_range('SELECT * FROM {pdf_to_imagefield} WHERE finished = 0', variable_get('pdf_to_imagefield_convert_pdf', 1), 0, 1);
   while ($file = db_fetch_object($result)) {
     $pdf = field_file_load($file->fid);
-    dpm($pdf);
     foreach (filefield_get_field_list(NULL, $file->field) as $fieldname => $field) {
       $images = pdf_to_imagefield_convert_pages($file, pdf_to_imagefield_widget_file_path($field), $pdf);
       pdf_to_imagefield_save_converted($images, $field, $pdf);
@@ -133,21 +132,6 @@ function pdf_to_imagefield_convert_pages($file, $path, $pdf) {
     $converted[] = $image;
     $count++;
   }
-  
-  if ($count == 0 && file_exists($path .'/'. $pdf['fid'] .'.jpg')) {
-    $image = new stdClass();
-    $image->filename = $pdf['fid'] .'.jpg';
-    $image->filepath = $path .'/'. $image->filename;
-    $image->filemime = file_get_mimetype($image->filepath);
-    $image->filesize = filesize($image->filepath);
-    $image->status = 1;
-    $image->timestamp = time();
-    $image->uid = 1;
-    drupal_write_record('files', $image);
-    $converted[] = $image;
-    $count++;    
-  }
-  
   db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
   return $converted;
 }
