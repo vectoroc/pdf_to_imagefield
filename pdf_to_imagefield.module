@@ -166,6 +166,7 @@ function pdf_to_imagefield_save_converted($images, $field, $pdf) {
   foreach (filefield_get_file_references($pdf) as $nid => $vid) {
     $node = node_load($nid);
     if (count($images)) {
+      $node->{$field['field_name']} = array();
       foreach ($images as $image) {
         $node->{$field['field_name']}[] = (array) $image;
       }
