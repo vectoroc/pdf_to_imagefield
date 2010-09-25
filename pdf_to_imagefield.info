@@ -1,0 +1,14 @@
+; $Id: pdf_to_imagefield.info,v 1.1 2010/05/13 18:41:12 peritus Exp $
+name = PDF to Imagefield
+description = Imports PDF file and split pages into ImageField files
+core = 6.x
+dependencies[] = imagefield
+dependencies[] = imageapi
+dependencies[] = imageapi_imagemagick
+package = CCK
+; Information added by drupal.org packaging script on 2010-05-14
+version = "6.x-1.0-beta1"
+core = "6.x"
+project = "pdf_to_imagefield"
+datestamp = "1273842910"
+

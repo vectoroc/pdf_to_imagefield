@@ -1,0 +1,395 @@
+<?php
+// $Id: pdf_to_imagefield.module,v 1.1 2010/05/13 18:41:12 peritus Exp $
+
+/**
+ * @file
+ * PDF to ImageField core hooks and menu callbacks.
+ */
+
+/**
+ * Implementation of hook_menu().
+ */
+function pdf_to_imagefield_menu() {
+  $items = array();
+  $items['admin/settings/pdf_to_imagefield'] = array(
+    'title' => 'PDF to ImageField',
+    'description' => 'Allow users to configure pdf conversion settings',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('pdf_to_imagefield_settings_form'),
+    'access arguments' => array('administer site configuration'),
+    'weight' => 1,
+  );
+  return $items;
+}
+
+/**
+ * Implementation of hook_theme().
+ */
+function pdf_to_imagefield_theme() {
+  return array(
+    // pdf_to_imagefield_widget form element type theme function.
+    'pdf_to_imagefield_widget' => array(
+      'arguments' => array('element' => NULL),
+    ),
+    // Use to generate a preview (admin view) of an imagefield item for use in
+    // field item forms and filefield widgets. Invoked by filefield_widget_process.
+    'pdf_to_imagefield_widget_preview' => array(
+      'arguments' => array('item' => NULL),
+    )
+  );
+}
+
+/**
+ * Implementation of hook_cron().
+ */
+function pdf_to_imagefield_cron() {
+  $result = db_query_range('SELECT * FROM {pdf_to_imagefield} WHERE finished = 0', variable_get('pdf_to_imagefield_convert_pdf', 1), 0, 1);
+  while ($file = db_fetch_object($result)) {
+    $pdf = field_file_load($file->fid);
+    dpm($pdf);
+    foreach (filefield_get_field_list(NULL, $file->field) as $fieldname => $field) {
+      $images = pdf_to_imagefield_convert_pages($file, pdf_to_imagefield_widget_file_path($field), $pdf);
+      pdf_to_imagefield_save_converted($images, $field, $pdf);
+    }
+  }
+}
+
+/**
+ * Implementation of hook_elements().
+ */
+function pdf_to_imagefield_elements() {
+  $elements = array();
+  // An PDF to ImageField is really just a FileField.
+  $filefield_elements = module_invoke('filefield', 'elements');
+  $elements['pdf_to_imagefield_widget'] = $filefield_elements['filefield_widget'];
+  $elements['pdf_to_imagefield_widget']['#process'][] = 'pdf_to_imagefield_widget_process';
+  return $elements;
+}
+
+/**
+ * Implementation of CCK's hook_widget_info().
+ */
+function pdf_to_imagefield_widget_info() {
+  $module_path = drupal_get_path('module', 'pdf_to_imagefield');
+  return array(
+    'pdf_to_imagefield_widget' => array(
+      'label' => t('PDF to ImageField'),
+      'field types' => array('filefield'),
+      'multiple values' => CONTENT_HANDLE_CORE,
+      'callbacks' => array('default value' => CONTENT_CALLBACK_CUSTOM),
+      'description' => t('An edit widget for pdf files, including functionality to convert pdf pages to ImageField files.'),
+    ),
+  );
+}
+
+/**
+ * Implementation of CCK's hook_widget_settings().
+ */
+function pdf_to_imagefield_widget_settings($op, $widget) {
+  switch ($op) {
+    case 'form':
+      return pdf_to_imagefield_widget_settings_form($widget);
+    case 'validate':
+      return pdf_to_imagefield_widget_settings_validate($widget);
+    case 'save':
+      return pdf_to_imagefield_widget_settings_save($widget);
+  }
+}
+
+/**
+ * Implementation of CCK's hook_widget().
+ */
+function pdf_to_imagefield_widget(&$form, &$form_state, $field, $items, $delta = 0) {
+  return filefield_widget($form, $form_state, $field, $items, $delta);
+}
+
+/**
+ * Implementation of CCK's hook_default_value().
+ */
+function pdf_to_imagefield_default_value(&$form, &$form_state, $field, $delta) {
+  return filefield_default_value($form, $form_state, $field, $delta);
+}
+
+/**
+ * Function to convert pages from pdf file to ImageField files
+ */
+function pdf_to_imagefield_convert_pages($file, $path, $pdf) {
+  $source = $pdf['filepath'];
+  $result = $path .'/'. $pdf['fid'] .'.jpg';
+  $density = '-density '. $file->density_x .'x'. $file->density_y;
+  pdf_to_imagefield_convert_pdf($source, $result, array(), array($density));
+  $count = 0;
+  $converted = array();
+  while (file_exists($path .'/'. $pdf['fid'] .'-'. $count .'.jpg')) {
+    $image = new stdClass();
+    $image->filename = $pdf['fid'] .'-'. $count .'.jpg';
+    $image->filepath = $path .'/'. $image->filename;
+    $image->filemime = file_get_mimetype($image->filepath);
+    $image->filesize = filesize($image->filepath);
+    $image->status = 1;
+    $image->timestamp = time();
+    $image->uid = 1;
+    drupal_write_record('files', $image);
+    $converted[] = $image;
+    $count++;
+  }
+  
+  if ($count == 0 && file_exists($path .'/'. $pdf['fid'] .'.jpg')) {
+    $image = new stdClass();
+    $image->filename = $pdf['fid'] .'.jpg';
+    $image->filepath = $path .'/'. $image->filename;
+    $image->filemime = file_get_mimetype($image->filepath);
+    $image->filesize = filesize($image->filepath);
+    $image->status = 1;
+    $image->timestamp = time();
+    $image->uid = 1;
+    drupal_write_record('files', $image);
+    $converted[] = $image;
+    $count++;    
+  }
+  
+  db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
+  return $converted;
+}
+
+/**
+ * Check if field path is good to save file
+ */
+function pdf_to_imagefield_widget_file_path($field) {
+  $path = filefield_widget_file_path($field);
+  if (!file_check_directory($path, FILE_CREATE_DIRECTORY | FILE_MODIFY_PERMISSIONS, 'default_path')) {
+    return FALSE;
+  }
+  return $path;
+}
+
+/**
+ * Save converted images as ImageField files
+ */
+function pdf_to_imagefield_save_converted($images, $field, $pdf) {
+  foreach (filefield_get_file_references($pdf) as $nid => $vid) {
+    $node = node_load($nid);
+    if (count($images)) {
+      foreach ($images as $image) {
+        $node->{$field['field_name']}[] = (array) $image;
+      }
+      node_save($node);
+      watchdog('pdf_to_imagefield', '%images pdf previews generated to %title node from %pdf file.', array('%images' => count($images), '%title' => $node->title,  '%pdf' => $pdf['filename']));
+    }
+    else {
+      watchdog('pdf_to_imagefield', 'No pdf previews generated to %title node from %pdf file. But it is still in cron list.', array('%title' => $node->title,  '%pdf' => $pdf['filename']), WATCHDOG_ERROR);
+    }
+  }
+}
+
+/**
+ * Menu callback. Administrator settings
+ */
+function pdf_to_imagefield_settings_form($form_state) {
+  $form = array();
+  $form['pdf_to_imagefield_convert_pdf'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PDF file limit'),
+    '#description' => t('Maximum number of pdf files to process per cron run.'),
+    '#default_value' => variable_get('pdf_to_imagefield_convert_pdf', 1),
+    '#size' => 6
+  );
+  $form = system_settings_form($form);
+  return $form;
+}
+
+/**
+ * Convert function (depends on ImageAPI module)
+ * This is almost a copy of _imageapi_imagemagick_convert() function, with
+ * that addition of $extra argument, used to pass parameters to convert *BEFORE*
+ * source file specification.
+ * Here it is needed to set density before rendering a PDF
+ */
+function pdf_to_imagefield_convert_pdf($source, $dest, $args = array(), $extra = array()) {
+  $d_arguments['quality'] = '-quality '. escapeshellarg(variable_get('imageapi_imagemagick_quality', 75));
+  // To make use of ImageMagick 6's parenthetical command grouping we need to make
+  // the $source image the first parameter and $dest the last.
+  // See http://www.imagemagick.org/Usage/basics/#cmdline for more info.
+
+  $command = implode(' ', $extra) .' '. escapeshellarg($source) .' '. implode(' ', $args) .' '. escapeshellarg($dest);
+  if (0 != _imageapi_imagemagick_convert_exec($command, $output, $errors)) {
+      $errors_txt = '<pre>' . (is_array($errors) ? implode("\n", $errors) : $errors) . '</pre>';
+      watchdog('pdf to image: imageapi imagemagick', '!errors', array('!errors' => $errors_txt), WATCHDOG_ERROR);
+      return FALSE;
+  }
+
+  return file_exists($dest);
+}
+
+/**
+ * Widget previews theme
+ */
+function theme_pdf_to_imagefield_widget_preview($file) {
+  // Remove the current description so that we get the filename as the link.
+  if (isset($file['data']['description'])) {
+    unset($file['data']['description']);
+  }
+  // get finished date or zero if not
+  $finished = db_result(db_query_range('SELECT finished FROM {pdf_to_imagefield} WHERE fid = %d', $file['fid'], 0, 1));
+  // define status text
+  $status = $finished
+    ? t('Page previews generated at %date', array('%date' => format_date($finished, 'custom', 'Y.m.d H:i')))
+    : t('Page previews generation not completed. Waiting in queue.');
+  // return output
+  return '<div class="filefield-file-info">'.
+           '<div class="filename">'. theme('filefield_file', $file) .'</div>'.
+           '<div class="filesize">'. format_size($file['filesize']) .'</div>'.
+           '<div class="filemime">'. $file['filemime'] .'</div>'.
+           '<div class="pdfstatus"><small>'. $status .'</small></div>'.
+         '</div>';
+}
+
+/**
+ * Implementation of hook_file_insert().
+ *
+ * Add file to table
+ */
+function pdf_to_imagefield_file_insert($file) {
+  if (pdf_to_imagefield_check_file($file)) {
+    $pdf = new stdClass();
+    $pdf->fid = $file->fid;
+    $pdf->field = $file->field['widget']['target_imagefield'];
+    $pdf->count = 0;
+    $pdf->density_x = preg_replace('/^([0-9]+)x[0-9]+$/', '\1', $file->field['widget']['density']);
+    $pdf->density_y = preg_replace('/^[0-9]+x([0-9]+)$/', '\1', $file->field['widget']['density']);
+    $pdf->finished = 0;
+    drupal_write_record('pdf_to_imagefield', $pdf);
+  }
+}
+
+/**
+ * Implementation of hook_file_delete().
+ *
+ * Delete file from table
+ */
+function pdf_to_imagefield_file_delete($file) {
+  db_query('DELETE FROM {pdf_to_imagefield} WHERE fid = %d', $file->fid);
+}
+
+/**
+ * Helper funtion to check if file is good to convert pages
+ */
+function pdf_to_imagefield_check_file($file) {
+  // check if variables are in place
+  if (!isset($file->field['widget']['module'])
+    && !isset($file->field['widget']['target_imagefield'])
+    && !isset($file->field['multiple'])) {
+    return FALSE;
+  }
+  // check if variables are good
+  if ($file->field['widget']['module'] != 'pdf_to_imagefield'
+    && $file->field['widget']['target_imagefield'] == 0
+    && $file->field['multiple'] == 1) {
+    return FALSE;
+  }
+  // return TRUE if TRUE
+  return TRUE;
+}
+
+/**
+ * @file
+ * PDF to ImageField widget hooks and callbacks.
+ */
+
+/**
+ * Implementation of CCK's hook_widget_settings($op = 'form').
+ */
+function pdf_to_imagefield_widget_settings_form($widget) {
+  if (!pdf_to_imagefield_check_imagemagick($widget)) {
+    drupal_set_message(t('ImageMagick test pdf to image conversion failed. Please check your system ImageMagick and/or Ghostscript configuration. While you seeing this message, pdf files will be queued and stay unprocessed.'), 'error');
+  }
+  // get standart settings from filefield
+  $form = module_invoke('filefield', 'widget_settings', 'form', $widget);
+  // set & lock pdf extension from modification
+  $form['file_extensions']['#default_value'] = 'pdf';
+  $form['file_extensions']['#disabled'] = TRUE;
+  // create list of options to target form
+  $imagefields = array();
+  $filefields = filefield_get_field_list(arg(3));
+  foreach ($filefields as $key => $filefield) {
+    if ($filefield['widget']['module'] == 'imagefield' && $filefield['multiple'] == 1) {
+      $imagefields[$key] = $filefield['widget']['label'] .' ('. $filefield['field_name'] .')';
+    }
+  }
+  // just 4fun
+  $imagefields[0] = count($imagefields)
+    ? t('No ImageField selected')
+    : t('No ImageField found');
+  // target form
+  $form['target_imagefield'] = array(
+    '#type' => 'select',
+    '#title' => t('Target ImageField'),
+    '#options' => $imagefields,
+    '#default_value' => !empty($widget['target_imagefield']) ? $widget['target_imagefield'] : 0,
+    '#description' => t('Choose an ImageField where should be stored extracted pages. ImageField must be assigned to the same node type and should allow to upload multiple images.'),
+  );
+
+  $form['density'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Density used for rendering PDF'),
+    '#default_value' => !empty($widget['density']) ? $widget['density'] : '100x100',
+    '#size' => 15,
+    '#maxlength' => 10,
+    '#description' => t('Horizontal and vertical density of the image XxY (e.g. 120x120). Default is 100x100.'),
+  );
+  return $form;
+}
+
+/**
+ * Implementation of CCK's hook_widget_settings($op = 'validate').
+ */
+function pdf_to_imagefield_widget_settings_validate($widget) {
+  // Check that set density is valid.
+  if (!empty($widget['density']) && !preg_match('/^[0-9]+x[0-9]+$/', $widget['density'])) {
+    form_set_error('density', t('Please specify a density in the format XxY (e.g. 120x120).'));
+  }
+}
+
+/**
+ * Implementation of CCK's hook_widget_settings($op = 'save').
+ */
+function pdf_to_imagefield_widget_settings_save($widget) {
+  $filefield_settings = module_invoke('filefield', 'widget_settings', 'save', $widget);
+  return array_merge($filefield_settings, array('target_imagefield', 'density'));
+}
+
+/**
+ * FormAPI theme function. Theme the output of an pdf field.
+ */
+function theme_pdf_to_imagefield_widget($element) {
+  $element['#id'] .= '-upload'; // Link the label to the upload field.
+  return theme('form_element', $element, $element['#children']);
+}
+
+/**
+ * Helper function to check if ImageMagick is ready to convert
+ */
+function pdf_to_imagefield_check_imagemagick($widget) {
+  // init test varaibles
+  $source = drupal_get_path('module', 'pdf_to_imagefield') .'/imagemagick_test.pdf';
+  $result = file_directory_path() . '/imagemagick_test.jpg';
+  $density = !empty($widget['density']) ? $widget['density'] : '100x100';
+  // check conversion
+  if (pdf_to_imagefield_convert_pdf($source, $result, array(), array('-density '. $density))) {
+    file_delete($result);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+
+/**
+ * Element #process callback function.
+ */
+function pdf_to_imagefield_widget_process($element, $edit, &$form_state, $form) {
+  $file = $element['#value'];
+  if (isset($element['preview']) && $file['fid'] != 0) {
+    $element['preview']['#value'] = theme('pdf_to_imagefield_widget_preview', $file);
+  }
+  return $element;
+}

@@ -1,0 +1,60 @@
+<?php
+// $Id: pdf_to_imagefield.install,v 1.1 2010/05/13 18:41:12 peritus Exp $
+
+/**
+ * @file
+ * PDF to ImageField install and enable hooks.
+ */
+
+/**
+ * Implementation of hook_install().
+ */
+function pdf_to_imagefield_install() {
+  drupal_install_schema('pdf_to_imagefield');
+  drupal_load('module', 'content');
+  content_notify('install', 'pdf_to_imagefield');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function pdf_to_imagefield_uninstall() {
+  drupal_uninstall_schema('pdf_to_imagefield');
+  drupal_load('module', 'content');
+  content_notify('uninstall', 'pdf_to_imagefield');
+}
+
+/**
+ * Implementation of hook_enable().
+ */
+function pdf_to_imagefield_enable() {
+  drupal_load('module', 'content');
+  content_notify('enable', 'pdf_to_imagefield');
+}
+
+/**
+ * Implementation of hook_disable().
+ */
+function pdf_to_imagefield_disable() {
+  drupal_load('module', 'content');
+  content_notify('disable', 'pdf_to_imagefield');
+}
+
+/**
+ * Implementation of hook_schema().
+ */
+function pdf_to_imagefield_schema() {
+  $schema = array();
+  $schema['pdf_to_imagefield'] = array(
+    'fields' => array(
+      'pid' => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE),
+      'fid' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 0),
+      'field' => array('type' => 'varchar', 'length' => 32, 'not null' => TRUE, 'default' => ''),
+      'density_x' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 100),
+      'density_y' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'default' => 100),
+      'finished' => array('type' => 'int', 'not null' => TRUE, 'default' => 0),
+    ),
+    'primary key' => array('pid'),
+  );
+  return $schema;
+}
