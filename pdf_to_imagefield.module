@@ -429,13 +429,20 @@ function pdf_to_imagefield_convert_submit($form, &$form_state) {
     $pdf = $form_state['values'][$field_name][0];
     $pdf['density'] = $field['widget']['density'];
     
+    $dst_path = pdf_to_imagefield_widget_file_path($target_field);
+    $pages_count = _pdf_to_imagefield_get_pages_count($pdf['filepath']);
+    $operations = array(array('pdf_to_imagefield_convert_batch_init', array($pdf, $field)));
+    
+    foreach (range(0, $pages_count - 1) as $page) {
+      $operations[] = array('pdf_to_imagefield_convert_batch_do', array($pdf, $dst_path, $page));
+    }
+    
+    $operations[] = array('pdf_to_imagefield_convert_batch_finish', array($pdf, $target_field));
+    
     batch_set(array(
       'title' => t('Exporting'),
-      'operations' => array(
-        array('pdf_to_imagefield_convert_batch_init', array($pdf, $field)),
-        array('pdf_to_imagefield_convert_batch_do', array($pdf, $target_field)),
-      ),
-      'finished' => 'pdf_to_imagefield_convert_batch_finished',
+      'operations' => $operations,
+//      'finished' => 'pdf_to_imagefield_convert_batch_finished',
     ));
     batch_process();
   }
@@ -450,36 +457,22 @@ function pdf_to_imagefield_convert_batch_init($pdf, $field, &$context) {
   $context['message'] = t('Cleanup finished');
 }
 
-function pdf_to_imagefield_convert_batch_do($pdf, $target_field, &$context) {
-  if (empty($context['sandbox'])) {
-    $context['sandbox']['dst_path'] = pdf_to_imagefield_widget_file_path($target_field);
-    $context['sandbox']['images'] = array();
-    $context['sandbox']['current_page'] = 0;
-    $context['sandbox']['max'] = _pdf_to_imagefield_get_pages_count($pdf['filepath']);
-  }
-  
-  $dst_path     = $context['sandbox']['dst_path'];
-  $current_page = $context['sandbox']['current_page'];
-  
+function pdf_to_imagefield_convert_batch_do($pdf, $dst_path, $current_page, &$context) {
   $file = pdf_to_imagefield_convert_page($pdf, $dst_path, $current_page);
 
-  $context['sandbox']['images'][] = $file;
-  $context['sandbox']['current_page']++;
-  $context['message'] = "Converted page $current_page";
+  $context['results'][] = $file;
+  $context['message'] = "Converting page $current_page";
+}
   
-  if ($context['sandbox']['current_page'] != $context['sandbox']['max']) {
-    $context['finished'] = $context['sandbox']['current_page'] / $context['sandbox']['max'];
-  }
-  else {
+function pdf_to_imagefield_convert_batch_finish($pdf, $target_field, &$context) {
+  $images = array_filter($context['results']);
+  if (count($images)) {
     db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
     pdf_to_imagefield_save_converted($images, $target_field, $pdf);
-    
-    $context['results'][] = $context['sandbox']['images'];
+    $context['message'] = t('Saving result');
   }
-}
-
-function pdf_to_imagefield_convert_batch_finished($success, $results, $operations) {
-  dpm($results);
+  
+  $context['results'] = $images;
 }
 
 function pdf_to_imagefield_delete_converted($pdf, $field) {
