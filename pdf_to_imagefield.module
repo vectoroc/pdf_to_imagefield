@@ -44,10 +44,12 @@ function pdf_to_imagefield_theme() {
  */
 function pdf_to_imagefield_cron() {
   $result = db_query_range('SELECT * FROM {pdf_to_imagefield} WHERE finished = 0', variable_get('pdf_to_imagefield_convert_pdf', 1), 0, 1);
-  while ($file = db_fetch_object($result)) {
-    $pdf = field_file_load($file->fid);
-    foreach (filefield_get_field_list(NULL, $file->field) as $fieldname => $field) {
-      $images = pdf_to_imagefield_convert_pages($file, pdf_to_imagefield_widget_file_path($field), $pdf);
+  while ($pdf_attr = db_fetch_object($result)) {
+    $pdf = field_file_load($pdf_attr->fid);
+    $pdf['density'] = $pdf_attr->density_x .'x'. $pdf_attr->density_y;
+    
+    foreach (filefield_get_field_list(NULL, $pdf_attr->field) as $fieldname => $field) {
+      $images = pdf_to_imagefield_convert_pages($pdf, $field);
       pdf_to_imagefield_save_converted($images, $field, $pdf);
     }
   }
@@ -112,24 +114,34 @@ function pdf_to_imagefield_default_value(&$form, &$form_state, $field, $delta) {
 /**
  * Function to convert pages from pdf file to ImageField files
  */
-function pdf_to_imagefield_convert_pages($file, $path, $pdf) {
-  $source = $pdf['filepath'];
-  $result = $path .'/'. $pdf['fid'] .'.jpg';
-  $density = '-density '. $file->density_x .'x'. $file->density_y;
-  pdf_to_imagefield_convert_pdf($source, $result, array(), array($density));
-  $count = 0;
-  $converted = array();
-  if (file_exists($path .'/'. $pdf['fid'] .'.jpg')) {
-    $converted[] = pdf_to_imagefield_save_image($pdf['fid'] .'.jpg', $path);
+function pdf_to_imagefield_convert_pages($pdf, $to_field) {
+  $pages_count = _pdf_to_imagefield_get_pages_count($pdf['filepath']);
+  $dst_path    = pdf_to_imagefield_widget_file_path($to_field);
+  
+  for($page = 0; $page < $pages_count; $page++) {
+    $converted[] = pdf_to_imagefield_convert_page($pdf, $dst_path, $page);
   }
-  else {
-    while (file_exists($path .'/'. $pdf['fid'] .'-'. $count .'.jpg')) {
-      $converted[] = pdf_to_imagefield_save_image($pdf['fid'] .'-'. $count .'.jpg', $path);
-      $count++;
-    }
-  }
+  
   db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
+  //TODO: add error logging
+  
   return $converted;
+}
+
+function pdf_to_imagefield_convert_page($pdf, $dst_path, $page = 0) {
+  $filename = "$pdf[fid]-$page.jpg";
+  $source   = "$pdf[filepath][$page]";
+  $result   = $dst_path .'/'. $filename;
+  $density  = '-density '. $pdf['density'];
+  
+  pdf_to_imagefield_convert_pdf($source, $result, array(), array($density));
+  
+  $file = null;
+  if (file_exists($result)) {
+    $file = pdf_to_imagefield_save_image($filename, $dst_path);
+  }
+  
+  return $file;
 }
 
 /**
@@ -207,8 +219,8 @@ function pdf_to_imagefield_convert_pdf($source, $dest, $args = array(), $extra =
   // To make use of ImageMagick 6's parenthetical command grouping we need to make
   // the $source image the first parameter and $dest the last.
   // See http://www.imagemagick.org/Usage/basics/#cmdline for more info.
-
   $command = implode(' ', $extra) .' '. escapeshellarg($source) .' '. implode(' ', $args) .' '. escapeshellarg($dest);
+
   if (0 != _imageapi_imagemagick_convert_exec($command, $output, $errors)) {
       $errors_txt = '<pre>' . (is_array($errors) ? implode("\n", $errors) : $errors) . '</pre>';
       watchdog('pdf to image: imageapi imagemagick', '!errors', array('!errors' => $errors_txt), WATCHDOG_ERROR);
@@ -251,7 +263,6 @@ function pdf_to_imagefield_file_insert($file) {
     $pdf = new stdClass();
     $pdf->fid = $file->fid;
     $pdf->field = $file->field['widget']['target_imagefield'];
-    $pdf->count = 0;
     $pdf->density_x = preg_replace('/^([0-9]+)x[0-9]+$/', '\1', $file->field['widget']['density']);
     $pdf->density_y = preg_replace('/^[0-9]+x([0-9]+)$/', '\1', $file->field['widget']['density']);
     $pdf->finished = 0;
@@ -388,5 +399,148 @@ function pdf_to_imagefield_widget_process($element, $edit, &$form_state, $form) 
   if (isset($element['preview']) && $file['fid'] != 0) {
     $element['preview']['#value'] = theme('pdf_to_imagefield_widget_preview', $file);
   }
+  
+  $element['pdf_to_imagefield_convert'] = array(
+    '#name' => implode('_', $element['#parents']) .'_pdf_to_imagefield_convert',
+    '#type' => 'submit',
+    '#value' => t('Convert'),
+    '#submit' => array('pdf_to_imagefield_convert_submit'),
+    '#field_name' => $element['#field_name'],
+    '#delta' => $element['#delta'],
+  );
+  
+  $element['pdf_to_imagefield_convert_description'] = array(
+    '#type' => 'item',
+    '#description' => t('Create images from pdf file. Exsting images will be deleted.'),
+  );
+  
   return $element;
+}
+
+function pdf_to_imagefield_convert_submit($form, &$form_state) {
+  $field_name = $form_state['clicked_button']['#field_name'];
+  $node_type  = $form_state['values']['type'];
+  $field      = array_pop(filefield_get_field_list(NULL, $field_name));
+  
+  $target_field_name = $field['widget']['target_imagefield'];
+  $target_field = array_pop(filefield_get_field_list(NULL, $target_field_name));
+  
+  if (is_array($form_state['values'][$field_name]) && count($form_state['values'][$field_name])) {
+    $pdf = $form_state['values'][$field_name][0];
+    $pdf['density'] = $field['widget']['density'];
+    
+    batch_set(array(
+      'title' => t('Exporting'),
+      'operations' => array(
+        array('pdf_to_imagefield_convert_batch_init', array($pdf, $field)),
+        array('pdf_to_imagefield_convert_batch_do', array($pdf, $target_field)),
+      ),
+      'finished' => 'pdf_to_imagefield_convert_batch_finished',
+    ));
+    batch_process();
+  }
+}
+
+function pdf_to_imagefield_convert_batch_init($pdf, $field, &$context) {
+  // mark as not converted
+  db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', 0, $pdf['fid']);
+  pdf_to_imagefield_delete_converted($pdf, $field);
+    
+  $context['results'][] = $pdf_attr;
+  $context['message'] = t('Cleanup finished');
+}
+
+function pdf_to_imagefield_convert_batch_do($pdf, $target_field, &$context) {
+  if (empty($context['sandbox'])) {
+    $context['sandbox']['dst_path'] = pdf_to_imagefield_widget_file_path($target_field);
+    $context['sandbox']['images'] = array();
+    $context['sandbox']['current_page'] = 0;
+    $context['sandbox']['max'] = _pdf_to_imagefield_get_pages_count($pdf['filepath']);
+  }
+  
+  $dst_path     = $context['sandbox']['dst_path'];
+  $current_page = $context['sandbox']['current_page'];
+  
+  $file = pdf_to_imagefield_convert_page($pdf, $dst_path, $current_page);
+
+  $context['sandbox']['images'][] = $file;
+  $context['sandbox']['current_page']++;
+  $context['message'] = "Converted page $current_page";
+  
+  if ($context['sandbox']['current_page'] != $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['current_page'] / $context['sandbox']['max'];
+  }
+  else {
+    db_query('UPDATE {pdf_to_imagefield} SET finished = %d WHERE fid = %d', time(), $pdf['fid']);
+    pdf_to_imagefield_save_converted($images, $target_field, $pdf);
+    
+    $context['results'][] = $context['sandbox']['images'];
+  }
+}
+
+function pdf_to_imagefield_convert_batch_finished($success, $results, $operations) {
+  dpm($results);
+}
+
+function pdf_to_imagefield_delete_converted($pdf, $field) {
+  $pdf = (array) $pdf;
+  $converted_files = array();
+  $converted_field = array_pop(filefield_get_field_list(NULL, $field['widget']['target_imagefield']));
+  
+  foreach (filefield_get_file_references($pdf, $field) as $nid => $vid) {
+    $node = node_load($nid);
+    $images = $node->{$converted_field['field_name']};
+
+    foreach ($images as $i => $image) {
+      list($fid) = explode('-', $image['filename']);
+      if ($fid == $pdf['fid']) {
+        $converted_files[$image['fid']] = $image;
+      }
+    }
+  }
+  
+  pdf_to_imagefield_delete_file_references(
+    array_shift($converted_files),
+    $converted_field,
+    $converted_files
+  );
+  
+  foreach ($converted_files as $file) {
+    if (field_file_delete($file) !== TRUE) {
+      drupal_set_message(t('Error happend while trying to delete converted pages'), 'error');
+    }
+  }
+}
+
+function pdf_to_imagefield_delete_file_references($file, $field, $files_quene = array()) {//content_database_info
+  foreach (filefield_get_file_references($file) as $nid => $vid) {
+    $node   = node_load($nid, NULL, TRUE);
+    $images = $node->{$field['field_name']};
+    
+    foreach ($images as $i => $image) {
+      if ($image['fid'] == $file['fid'] || isset($files_quene[$image['fid']])) {
+        unset($images[$i]);
+      }
+    }
+    
+    if (count($images) < count($node->{$field['field_name']})) {
+      dpm(count($images));
+      $node->{$field['field_name']} = $images;
+      node_save($node);
+    }
+  }
+
+  if (count($files_quene) > 0) {
+    pdf_to_imagefield_delete_file_references(
+      array_shift($files_quene),
+      $field,
+      $files_quene
+    );
+  }
+}
+
+function _pdf_to_imagefield_get_pages_count($filepath) {
+  if (file_exists($filepath)) {
+    return shell_exec('strings '. $filepath .'| grep -o -e "/Count [0-9]\+" | sed "s/\/Count //" | sort -n | tail -n 1');
+  }
 }
