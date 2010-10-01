@@ -491,7 +491,7 @@ function pdf_to_imagefield_delete_converted($pdf, $field) {
     $node = node_load($nid);
     $images = $node->{$converted_field['field_name']};
 
-    foreach ($images as $i => $image) {
+    foreach ((array)$images as $i => $image) {
       list($fid) = explode('-', $image['filename']);
       if ($fid == $pdf['fid']) {
         $converted_files[$image['fid']] = $image;
@@ -499,11 +499,7 @@ function pdf_to_imagefield_delete_converted($pdf, $field) {
     }
   }
   
-  pdf_to_imagefield_delete_file_references(
-    array_shift($converted_files),
-    $converted_field,
-    $converted_files
-  );
+  pdf_to_imagefield_delete_file_references($converted_files, $converted_field);
   
   foreach ($converted_files as $file) {
     if (field_file_delete($file) !== TRUE) {
@@ -512,31 +508,15 @@ function pdf_to_imagefield_delete_converted($pdf, $field) {
   }
 }
 
-function pdf_to_imagefield_delete_file_references($file, $field, $files_quene = array()) {//content_database_info
-  foreach (filefield_get_file_references($file) as $nid => $vid) {
-    $node   = node_load($nid, NULL, TRUE);
-    $images = $node->{$field['field_name']};
-    
-    foreach ($images as $i => $image) {
-      if ($image['fid'] == $file['fid'] || isset($files_quene[$image['fid']])) {
-        unset($images[$i]);
-      }
-    }
-    
-    if (count($images) < count($node->{$field['field_name']})) {
-      dpm(count($images));
-      $node->{$field['field_name']} = $images;
-      node_save($node);
-    }
+function pdf_to_imagefield_delete_file_references($files, $field) {
+  $db_info = content_database_info($field);
+  $query   = "DELETE FROM {$db_info[table]} WHERE {$db_info['columns']['fid']['column']} = %d";
+  
+  foreach ($files as $file) {
+    db_query($query, $file['fid']);
   }
-
-  if (count($files_quene) > 0) {
-    pdf_to_imagefield_delete_file_references(
-      array_shift($files_quene),
-      $field,
-      $files_quene
-    );
-  }
+  
+  cache_clear_all('content:', content_cache_tablename(), TRUE);
 }
 
 function _pdf_to_imagefield_get_pages_count($filepath) {
