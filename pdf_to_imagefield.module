@@ -400,19 +400,23 @@ function pdf_to_imagefield_widget_process($element, $edit, &$form_state, $form) 
     $element['preview']['#value'] = theme('pdf_to_imagefield_widget_preview', $file);
   }
   
-  $element['pdf_to_imagefield_convert'] = array(
-    '#name' => implode('_', $element['#parents']) .'_pdf_to_imagefield_convert',
-    '#type' => 'submit',
-    '#value' => t('Convert'),
-    '#submit' => array('pdf_to_imagefield_convert_submit'),
-    '#field_name' => $element['#field_name'],
-    '#delta' => $element['#delta'],
-  );
-  
-  $element['pdf_to_imagefield_convert_description'] = array(
-    '#type' => 'item',
-    '#description' => t('Create images from pdf file. Exsting images will be deleted.'),
-  );
+  if (!_form_button_was_clicked($element['filefield_remove'])) {
+    if ($form_state['values']['nid'] && $file) {
+      $element['pdf_to_imagefield_convert'] = array(
+        '#name' => implode('_', $element['#parents']) .'_pdf_to_imagefield_convert',
+        '#type' => 'submit',
+        '#value' => t('Convert'),
+        '#submit' => array('pdf_to_imagefield_convert_submit'),
+        '#field_name' => $element['#field_name'],
+        '#delta' => $element['#delta'],
+      );
+      
+      $element['pdf_to_imagefield_convert_description'] = array(
+        '#type' => 'item',
+        '#description' => t('Create images from pdf file. Exsting images will be deleted. <strong>All unsaved changes will be lost</strong>.'),
+      );
+    }
+  }
   
   return $element;
 }
