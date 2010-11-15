@@ -437,18 +437,22 @@ function pdf_to_imagefield_convert_submit($form, &$form_state) {
     $pages_count = _pdf_to_imagefield_get_pages_count($pdf['filepath']);
     $operations = array(array('pdf_to_imagefield_convert_batch_init', array($pdf, $field)));
     
-    foreach (range(0, $pages_count - 1) as $page) {
-      $operations[] = array('pdf_to_imagefield_convert_batch_do', array($pdf, $dst_path, $page));
+    if ($pages_count) {
+      foreach (range(0, $pages_count - 1) as $page) {
+        $operations[] = array('pdf_to_imagefield_convert_batch_do', array($pdf, $dst_path, $page));
+      }
+      
+      $operations[] = array('pdf_to_imagefield_convert_batch_finish', array($pdf, $target_field));
+      
+      batch_set(array(
+        'title' => t('Exporting'),
+        'operations' => $operations,
+  //      'finished' => 'pdf_to_imagefield_convert_batch_finished',
+      ));
     }
-    
-    $operations[] = array('pdf_to_imagefield_convert_batch_finish', array($pdf, $target_field));
-    
-    batch_set(array(
-      'title' => t('Exporting'),
-      'operations' => $operations,
-//      'finished' => 'pdf_to_imagefield_convert_batch_finished',
-    ));
-    batch_process();
+    else {
+      drupal_set_message(t('Can not detect number of pages'), 'error');
+    }
   }
 }
 
