@@ -518,6 +518,15 @@ function pdf_to_imagefield_delete_file_references($files, $field) {
 
 function _pdf_to_imagefield_get_pages_count($filepath) {
   if (file_exists($filepath)) {
-    return shell_exec('strings '. $filepath .'| grep -o -e "/Count [0-9]\+" | sed "s/\/Count //" | sort -n | tail -n 1');
+    if (function_exists('pdf_open_pdi_document')) {
+      $pdf = pdf_new();
+      $doc = pdf_open_pdi_document($pdf, $filepath, '');
+      return pdf_pcos_get_number($pdf, $doc, "length:pages");
+    }
+    else {
+      $pdftext = file_get_contents($filepath);
+      $num = preg_match_all("/\/Page\W/", $pdftext, $dummy);
+      return $num;
+    }
   }
 }
